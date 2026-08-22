@@ -34,7 +34,7 @@ class TagGroup(models.Model):
     """
     name = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(unique=True, blank=True)
-    images = models.ImageField()
+    images = models.ImageField(upload_to="categories/images/")
 
     def save(self, *args, **kwargs):
         if not self.slug:

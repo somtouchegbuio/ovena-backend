@@ -20,6 +20,7 @@ from customer_api.views import BaseCustomerAPIView
 from menu.views.main import LocationDependantMixin
 from collections import defaultdict
 from django.db.models import Exists, OuterRef
+from menu.pagifications import StandardResultsSetPagination
 
 from menu.utils.helper import (
     annotate_with_nearest_branch,
@@ -153,6 +154,8 @@ class TagGroupListView(BaseCustomerAPIView, ListAPIView):
 
 class CategorySearchView(LocationDependantMixin, BaseCustomerAPIView):
     serializer_class = CategorySearchInputSerializer
+    pagination_class = StandardResultsSetPagination
+    
     def post(self, request):
         user_point = self.get_user_point(request)
         if not user_point:
