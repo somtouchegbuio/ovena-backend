@@ -118,7 +118,15 @@ class DriverDocument(models.Model): # we can use
 class DriverVerification(models.Model):
     TYPE_NIN = "nin"
     TYPE_BVN = "bvn"
-    TYPE_CHOICES = [(TYPE_NIN, "NIN"), (TYPE_BVN, "BVN")]
+    TYPE_FACE_MATCH = "face_match"        # new
+    TYPE_BANK_ACCOUNT = "bank_account"    # new
+    TYPE_CHOICES = [
+        (TYPE_NIN, "NIN"),
+        (TYPE_BVN, "BVN"),
+        (TYPE_FACE_MATCH, "Face Match"),      # new
+        (TYPE_BANK_ACCOUNT, "Bank Account"),  # new
+    ]
+
 
     STATUS_PENDING = "pending"
     STATUS_SUCCESS = "success"
@@ -126,7 +134,7 @@ class DriverVerification(models.Model):
     STATUS_CHOICES = [(STATUS_PENDING, "Pending"), (STATUS_SUCCESS, "Success"), (STATUS_FAILED, "Failed")]
 
     driver = models.ForeignKey("accounts.DriverProfile", on_delete=models.CASCADE, related_name="verifications")
-    verification_type = models.CharField(max_length=10, choices=TYPE_CHOICES)
+    verification_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_PENDING)
 
     provider_name = models.CharField(max_length=60, blank=True)

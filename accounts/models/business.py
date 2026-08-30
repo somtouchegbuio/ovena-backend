@@ -11,6 +11,7 @@ class BusinessOnboardStatus(models.Model):
     admin = models.OneToOneField(BusinessAdmin, on_delete=models.CASCADE, related_name="cerd")
     onboarding_step = models.IntegerField(choices=PHASE, default=0)
     is_onboarding_complete = models.BooleanField(default=False)
+    needs_manual_review = models.BooleanField(default=False)  # new
 
 
 class BusinessCerd(models.Model):
@@ -96,3 +97,37 @@ class BusinessSubscription(models.Model):
     carousel_image = models.ImageField(upload_to="business/carousel/", null=True, blank=True)
 
     expires_at = models.DateTimeField(null=True, blank=True)
+
+
+class BusinessVerification(models.Model):
+    TYPE_TIN = "tin"
+    TYPE_RC = "rc"
+    TYPE_BVN = "bvn"
+    TYPE_CHOICES = [
+        (TYPE_TIN, "TIN"),
+        (TYPE_RC, "RC/CAC Number"),
+        (TYPE_BVN, "BVN"),
+    ]
+
+    STATUS_PENDING = "pending"
+    STATUS_SUCCESS = "success"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [(STATUS_PENDING, "Pending"), (STATUS_SUCCESS, "Success"), (STATUS_FAILED, "Failed")]
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="verifications")
+    verification_type = models.CharField(max_length=10, choices=TYPE_CHOICES)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_PENDING)
+
+    provider_name = models.CharField(max_length=60, blank=True)
+    provider_ref = models.CharField(max_length=120, blank=True)
+
+    request_payload = models.JSONField(default=dict, blank=True)
+    response_payload = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["business", "verification_type"], name="uniq_business_verification_type")
+        ]

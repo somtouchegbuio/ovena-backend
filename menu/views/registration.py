@@ -57,6 +57,21 @@ class RegisterMenusPhase3View(GenericAPIView):
                 return Response({"detail": "User is not business admin"}, status=403)
             return Response({"detail": "Business not created yet"}, status=400)
 
+
+        try:
+            BStatus:BusinessOnboardStatus = BusinessOnboardStatus.objects.get(admin=user.business_admin)
+        except BusinessOnboardStatus.DoesNotExist:
+            return Response(
+                {"detail": "Onboarding status deosn't exist. Contact support to update your business details."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if BStatus.is_onboarding_complete:
+            return Response(
+                {"detail": "Onboarding is already complete. Contact support to update your business details."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         menus_data = request.data.get("menus", [])
 
         # ✅ Validate everything once
@@ -115,11 +130,8 @@ class RegisterMenusPhase3View(GenericAPIView):
                     for ag in it.get("addon_groups", []):
                         for addon in ag.get("addons", []):
                             remember_defaults(addon["base_item"])
-        
-        # cprint(defaults_by_name)
 
         with transaction.atomic():
-            BStatus:BusinessOnboardStatus = BusinessOnboardStatus.objects.get(admin=user.business_admin)
             BStatus.onboarding_step = 3
             BStatus.is_onboarding_complete = True
             BStatus.save()

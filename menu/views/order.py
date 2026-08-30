@@ -764,7 +764,7 @@ class ResturantOrderView(GenericAPIView):
             status=status.HTTP_200_OK,
         )
 
-    def cancel_order(self, order: Order):
+    def cancel_order(self, order: Order): # the resturant rejects the order...
         """Branch cancels order"""
         if order.status in [OrderStatus.DELIVERED, OrderStatus.ON_THE_WAY, OrderStatus.PICKED_UP]:
             return Response(

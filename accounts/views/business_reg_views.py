@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
@@ -5,8 +6,10 @@ from rest_framework.permissions import AllowAny
 from rest_framework import status
 from accounts.models import(
     User, Business, Branch, 
-    BusinessAdmin, BusinessPayoutAccount, BranchOperatingHours, BusinessCerd, BusinessOnboardStatus
+    BusinessAdmin, BusinessPayoutAccount, BranchOperatingHours, BusinessCerd, BusinessOnboardStatus,
+    BusinessVerification,  # new model - see model_changes.md
 )
+from verification import service as verification_service
 from payments.services.base import ensure_valid_cred
 from payments.integrations.paystack.errors import PaystackAPIError
 from django.db import transaction, IntegrityError
@@ -57,32 +60,46 @@ class BusinessOnboardingStatusView(APIView):
     auth=[]
 )
 class RegisterBAdmin(GenericAPIView):
+    """
+    PUT /business/admin/register/
+
+    Combines what used to be two separate endpoints:
+      - RegisterBAdmin (POST, AllowAny)   - first-time signup
+      - ReRegisterBAdmin (POST, authenticated) - update your own details
+    """
     serializer_class = InS.RegisterBAdminSerializer
     permission_classes = [AllowAny]
 
-    def post(self, request):
+    def put(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         vd = serializer.validated_data
 
-        # try:
-        #     identifier = verify_phonenumber(vd["otp_code"], get_phone_number(vd["phone_number"]), vd["pin_id"])
-        # except OTPInvalidError as e:
-        #     return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            identifier = verify_phonenumber(vd["otp_code"], get_phone_number(vd["phone_number"]), vd["pin_id"])
+        except OTPInvalidError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        identifier = vd["phone_number"]
-        
         try:
             with transaction.atomic():
-                user, _ = User.objects.get_or_create(
+                user, is_new = User.objects.get_or_create(
                     phone_number=identifier,
-                    email=vd["email"],
+                    defaults={"email": vd["email"]},
                 )
-                business_admin = BusinessAdmin.objects.create(user=user, name=vd["full_name"],)
-                BusinessOnboardStatus.objects.create(admin=business_admin, onboarding_step= 0)
+                if not is_new:
+                    user.email = vd["email"]
+                    user.save(update_fields=["email"])
+
+                business_admin, _ = BusinessAdmin.objects.get_or_create(user=user)
+                business_admin.name = vd["full_name"]
+                business_admin.save(update_fields=["name"])
+
+                BusinessOnboardStatus.objects.get_or_create(
+                    admin=business_admin, defaults={"onboarding_step": 0}
+                )
         except IntegrityError as e:
             return Response(
-                {"error": f"Registration failed due to a database constraint. Registration failed: {str(e)}"},
+                {"error": f"Registration failed due to a database constraint: {str(e)}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except Exception as e:
@@ -94,50 +111,23 @@ class RegisterBAdmin(GenericAPIView):
         token = issue_jwt_for_user_with_plan(user, active_profile=PROFILE_BUSINESS_ADMIN)
 
         response_data = OpS.RegisterBAdminResponseSerializer({
-            "message": "User registered successfully",
+            "message": "User registered successfully" if is_new else "User details updated successfully",
             "refresh": token["refresh"],
             "access": token["access"],
             "user": {"id": user.id, "name": business_admin.name},
         })
-        return Response(response_data.data, status=status.HTTP_201_CREATED)
+        return Response(response_data.data, status=status.HTTP_201_CREATED if is_new else status.HTTP_200_OK)
 
-@extend_schema(
-    auth=[]
-)
-class ReRegisterBAdmin(GenericAPIView):
-    serializer_class = InS.RegisterBAdminSerializer
-    authentication_classes = [CustomBAdminAuth]
-    permission_classes = [IsBusinessAdmin]
+def _biz_ref_from(result: dict) -> str:
+    """Best-effort pull of a provider reference out of a verification.service result."""
+    data = result.get("data") if result else None
+    if not isinstance(data, dict):
+        return ""
+    for key in ("reference", "tracking_id", "entity_id", "id"):
+        if data.get(key):
+            return str(data[key])
+    return ""
 
-    def post(self, request):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        vd = serializer.validated_data
-
-        try:
-            identifier = verify_phonenumber(vd["otp_code"], get_phone_number(vd["phone_number"]), vd["pin_id"])
-        except OTPInvalidError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-      
-        try:
-            # identifier = vd["phone_number"]
-            user = User.objects.filter(id=request.user.id).update(
-                phone_number=identifier,
-                email=vd["email"],
-            )
-            business_admin = BusinessAdmin.objects.filter(user=user).update(name=vd["full_name"],)
-        except Exception as e:
-            return Response(
-                {"detail": f"Registration failed: {str(e)}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-
-        response_data = OpS.RegisterBAdminResponseSerializer({
-            "message": "User Updated registered successfully",
-            "user": {"id": user.id, "name": business_admin.name},
-        })
-        return Response(response_data.data, status=status.HTTP_201_CREATED)
 
 @extend_schema(
     responses={201: inline_serializer("Phase2Response", fields={
@@ -147,13 +137,26 @@ class ReRegisterBAdmin(GenericAPIView):
 )
 class RestaurantPhase1RegisterView(BaseBuisAdminAPIView, ImageMixin):
     """
-    Phase 1: Initial business + admin user registration.
-    Creates: Business (bare), User (businessadmin role), BusinessAdmin link.
-    No auth required — this is signup.
+    Phase 1: Business + admin registration details.
+
+    PUT, not POST — same pattern as the driver onboarding phases: call
+    this again with corrected data to fix a mistake. It updates the
+    existing Business in place rather than creating a duplicate. Locked
+    only once onboarding is fully complete (same lock point Phase 2
+    uses) - not on the first successful call, so this really is
+    "correctable until final submit," not "correctable exactly once."
     """
     serializer_class = InS.RestaurantPhase1Serializer
-    def post(self, request):
+    def put(self, request):
         business_admin = self.get_buisnessadmn(request)
+
+        onboard_status = BusinessOnboardStatus.objects.filter(admin=business_admin).first()
+        if onboard_status and onboard_status.is_onboarding_complete:
+            return Response(
+                {"detail": "Onboarding is already complete. Contact support to update your business details."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         vd = serializer.validated_data
@@ -162,37 +165,58 @@ class RestaurantPhase1RegisterView(BaseBuisAdminAPIView, ImageMixin):
 
         try:
             with transaction.atomic():
-                # Create the business shell
                 business_image = files.get("business_image")
                 business_logo = files.get("business_image")
                 if business_image:
                     self.validate_image(business_image)
                 if business_logo:
                     self.validate_image(business_logo)
-                
-                business = Business.objects.create(
+
+                business_fields = dict(
                     business_name=vd["business_name"],
                     business_type=vd["business_type"],
                     country=vd["country"],
                     business_address=vd["business_address"],
                     email=vd["email"],
                     phone_number=vd["phone_number"],
-                    business_image=business_image,
-                    business_logo=business_logo
                 )
-                
-                
-                BusinessCerd.objects.create(business=business)
+                if business_image:
+                    business_fields["business_image"] = business_image
+                if business_logo:
+                    business_fields["business_logo"] = business_logo
+
+                if business_admin.business_id:
+                    # Correcting an in-progress registration - update the
+                    # existing Business instead of creating a duplicate/
+                    # orphan row and re-pointing business_admin at it.
+                    business = business_admin.business
+                    for field, value in business_fields.items():
+                        setattr(business, field, value)
+                    business.save()
+                    is_new = False
+                else:
+                    business = Business.objects.create(**business_fields)
+                    BusinessCerd.objects.create(business=business)
+                    BusinessAdmin.objects.filter(id=business_admin.id).update(business=business)
+                    is_new = True
+
+                # NOTE: password is still required by the serializer on every
+                # call, so correcting e.g. just the address also means
+                # resupplying the password. Worth making it optional on
+                # resubmission if that's awkward for your frontend - didn't
+                # touch InS.RestaurantPhase1Serializer since it wasn't in
+                # what you uploaded this round.
                 user.set_password(vd["password"])
                 user.save()
 
-                # Link admin to business
-                BusinessAdmin.objects.filter(id=business_admin.id).update(business=business)
                 BusinessOnboardStatus.objects.filter(admin=business_admin).update(onboarding_step=1)
 
             return Response(
-                {"detail": "Business registered. Proceed to onboarding.", "business_id": business.id},
-                status=status.HTTP_201_CREATED,
+                {
+                    "detail": "Business registered. Proceed to onboarding." if is_new else "Business details updated.",
+                    "business_id": business.id,
+                },
+                status=status.HTTP_201_CREATED if is_new else status.HTTP_200_OK,
             )
         except ValueError as e:
             return Response(
@@ -215,11 +239,12 @@ class RestaurantPhase2OnboardingView(GenericAPIView):
     """
     Phase 2: Full business details — documents, image, payment, operations, branches.
     Requires the admin to be authenticated.
+
     """
     authentication_classes = [CustomBAdminAuth]
     permission_classes = [IsBusinessAdmin]
     serializer_class = InS.RestaurantPhase2Serializer
-    def post(self, request):
+    def put(self, request):
         user = request.user
         try:
             admin = user.business_admin
@@ -229,31 +254,84 @@ class RestaurantPhase2OnboardingView(GenericAPIView):
         restaurant:Business = admin.business
         restaurant_cerds = admin.business.cerd
 
+        onboard_status = BusinessOnboardStatus.objects.filter(admin=admin).first()
+        # Reentrance guard: without this, an admin whose business is already
+        # fully onboarded could keep POSTing here and silently rewrite their
+        # RC number, TIN, and bank/BVN details with onboarding_complete
+        # re-set to True every time, no re-review involved.
+        if onboard_status and onboard_status.is_onboarding_complete:
+            return Response(
+                {"detail": "Onboarding is already complete. Contact support to update your business details."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         vd = serializer.validated_data
+
+        # ── Verification calls happen outside the DB transaction (no point
+        #    holding locks/a long transaction open across external HTTP calls) ──
+        tin = vd.get("tax_identification_number", "")
+        rc_number = vd.get("rc_number", "")
+        payment_data = vd.get("payment", {})
+        bvn = payment_data.get("bvn") if payment_data else None
+
+        tin_result = verification_service.verify_tin(tin) if tin else None
+        rc_result = verification_service.verify_rc_number(rc_number) if rc_number else None
+        bvn_result = verification_service.verify_business_bvn(bvn) if bvn else None
+
+        # A check that was never run (field left blank) isn't a "failure" -
+        # only an attempted-and-failed check should force manual review.
+        needs_manual_review = any(
+            result is not None and not result["success"]
+            for result in (tin_result, rc_result, bvn_result)
+        )
 
         with transaction.atomic():
             # Update restaurant details
             restaurant_cerds.registered_business_name = vd.get("registered_business_name", restaurant.business_name)
             restaurant_cerds.bn_number = vd.get("bn_number", "")
-            restaurant_cerds.rc_number = vd.get("rc_number", "")
-            restaurant_cerds.tax_identification_number = vd.get("tax_identification_number", "")
+            restaurant_cerds.rc_number = rc_number
+            restaurant_cerds.tax_identification_number = tin
             restaurant_cerds.business_type = vd.get("business_type", restaurant.business_type)
             restaurant_cerds.doc_type = vd.get("doctype", "cac")
 
             if "business_documents" in request.FILES:
                 restaurant_cerds.business_doc = request.FILES["business_documents"]
-            
-            restaurant.onboarding_complete = True
+
+            for verification_type, result, payload in (
+                (BusinessVerification.TYPE_TIN, tin_result, {"tin": tin}),
+                (BusinessVerification.TYPE_RC, rc_result, {"rc_number": rc_number}),
+                (BusinessVerification.TYPE_BVN, bvn_result, {"bvn": (bvn or "")[-4:].zfill(11)}),  # masked
+            ):
+                if result is None:
+                    continue
+                BusinessVerification.objects.update_or_create(
+                    business=restaurant,
+                    verification_type=verification_type,
+                    defaults={
+                        "status": BusinessVerification.STATUS_SUCCESS if result["success"] else BusinessVerification.STATUS_FAILED,
+                        "provider_name": result["provider"] or "",
+                        "provider_ref": _biz_ref_from(result),
+                        "request_payload": payload,
+                        "response_payload": result["data"] if result["success"] else {"attempts": result["attempts"]},
+                        "completed_at": timezone.now(),
+                    },
+                )
+
+            # Per your instruction: a failed check doesn't block this phase
+            # from completing, but it does NOT get marked fully onboarded -
+            # it sits at needs_manual_review until someone clears it.
+            restaurant.onboarding_complete = not needs_manual_review
             restaurant_cerds.save()
             restaurant.save()
-            BusinessOnboardStatus.objects.filter(
-                admin=admin
-            ).update(onboarding_step=2)
+            BusinessOnboardStatus.objects.filter(admin=admin).update(
+                onboarding_step=2,
+                # is_onboarding_complete=not needs_manual_review,
+                needs_manual_review=needs_manual_review,
+            )
 
             # Payment info
-            payment_data = vd.get("payment", {})
             if payment_data:
                 BusinessPayoutAccount.objects.update_or_create(
                     business=restaurant,
@@ -263,6 +341,7 @@ class RestaurantPhase2OnboardingView(GenericAPIView):
                         "bank_account_number": payment_data["account_number"],
                         "bank_account_name": payment_data["account_name"],
                         "bvn": payment_data["bvn"][-4:],
+                        "bvn_verification_ref": _biz_ref_from(bvn_result) if bvn_result else "",
                     },
                 )
             
@@ -273,7 +352,13 @@ class RestaurantPhase2OnboardingView(GenericAPIView):
             else:
                 self.sync_branches_bulk(restaurant, branches_data)
 
-        return Response({"detail": "Onboarding complete."}, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "detail": "Onboarding submitted." if needs_manual_review else "Onboarding complete.",
+                "needs_manual_review": needs_manual_review,
+            },
+            status=status.HTTP_200_OK,
+        )
     
     def sync_branches_bulk(self, restaurant, branches_data):
         
