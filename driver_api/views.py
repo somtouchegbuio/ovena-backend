@@ -4,7 +4,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.response import Response
-from rest_framework.views import APIView
+from rest_framework.generics import GenericAPIView
 from drf_spectacular.utils import extend_schema # type: ignore
 
 from accounts.models import DriverAvailability, DriverProfile
@@ -40,7 +40,7 @@ from authflow.services.phone_number import get_phone_number
 from notifications.services import get_unread_count
 
 
-class BaseDriverAPIView(APIView):
+class BaseDriverAPIView(GenericAPIView):
     authentication_classes = [CustomDriverAuth]
     permission_classes = [IsDriver, IsNotSuspended]
 

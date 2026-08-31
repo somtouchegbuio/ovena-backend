@@ -319,15 +319,11 @@ class RestaurantPhase2OnboardingView(GenericAPIView):
                     },
                 )
 
-            # Per your instruction: a failed check doesn't block this phase
-            # from completing, but it does NOT get marked fully onboarded -
-            # it sits at needs_manual_review until someone clears it.
-            restaurant.onboarding_complete = not needs_manual_review
+            restaurant.onboarding_complete = not needs_manual_review# remove
             restaurant_cerds.save()
             restaurant.save()
             BusinessOnboardStatus.objects.filter(admin=admin).update(
                 onboarding_step=2,
-                # is_onboarding_complete=not needs_manual_review,
                 needs_manual_review=needs_manual_review,
             )
 

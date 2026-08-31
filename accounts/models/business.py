@@ -12,6 +12,20 @@ class BusinessOnboardStatus(models.Model):
     onboarding_step = models.IntegerField(choices=PHASE, default=0)
     is_onboarding_complete = models.BooleanField(default=False)
     needs_manual_review = models.BooleanField(default=False)  # new
+    checked = models.BooleanField(default=False) # for admins, make sure we remove this on new chnage;
+    # STATUS_DRAFT = "draft"
+    # STATUS_SUBMITTED = "submitted"
+    # STATUS_APPROVED = "approved"
+    # STATUS_REJECTED = "rejected"
+
+    # STATUS_CHOICES = [
+    #     (STATUS_DRAFT, "Draft"),
+    #     (STATUS_SUBMITTED, "Submitted"),
+    #     (STATUS_APPROVED, "Approved"),
+    #     (STATUS_REJECTED, "Rejected"),
+    # ]
+
+    # status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT)
 
 
 class BusinessCerd(models.Model):
