@@ -27,7 +27,7 @@ from accounts.models import (
     DriverVerification,
     BusinessVerification,
     BusinessOnboardStatus,
-    BusinessAdmin
+    # BusinessAdmin
 )
 from driver_api.views import BaseDriverAPIView
 from business_api.views import BaseBuisAdminAPIView
@@ -295,32 +295,6 @@ class BusinessBVNVerificationView(BaseBuisAdminAPIView):
 
 # BusinessOnboardStatus
 # check onboarding to check if it was approved, add the conterpart to the admin section
-class BusinessStatusView(BaseBuisAdminAPIView):
-    """POST /api/verify/business/bvn/"""
-
-    serializer_class = BusinessBVNSerializer
-    def get(self, request):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        # BusinessOnboardStatus
-        business_admin = self.get_buisnessadmn(request)
-        business = business_admin.business
-        if business is None:
-            return Response({"success": False, "error": "No business on this account."}, status=status.HTTP_400_BAD_REQUEST)
-
-        bvn = serializer.validated_data["bvn"]
-        result = service.verify_business_bvn(bvn)
-        _record_business_verification(business, BusinessVerification.TYPE_BVN, result, request_payload={"bvn": bvn})
-
-        if result["success"]:
-            payout = getattr(business, "payout", None)
-            if payout is not None:
-                payout.bvn = bvn[-4:]
-                payout.bvn_verification_ref = _extract_ref(result.get("data"))
-                payout.save(update_fields=["bvn", "bvn_verification_ref"])
-
-        return _verification_response(result)
-
 class BusinessManualReviewStatusView(BaseBuisAdminAPIView):
     """
     GET /api/verify/business/manual-review/status/
