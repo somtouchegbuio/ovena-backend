@@ -20,6 +20,9 @@ from .serializers import (
     TINVerificationSerializer,
     RCNumberSerializer,
     BusinessBVNSerializer,
+    AdminBusinessReviewListSerializer,
+    AdminBusinessReviewDetailsSerializer,
+    AdminBusinessReviewUpdateSerializer,
 )
 from . import service
 
@@ -27,11 +30,12 @@ from accounts.models import (
     DriverVerification,
     BusinessVerification,
     BusinessOnboardStatus,
-    # BusinessAdmin
+    BusinessAdmin,
 )
 from driver_api.views import BaseDriverAPIView
 from business_api.views import BaseBuisAdminAPIView
-
+from common.pagination import StandardResultsSetPagination
+from django.shortcuts import get_object_or_404
 # ──────────────────────────────────────────────
 # PERSISTENCE HELPERS
 # ──────────────────────────────────────────────
@@ -345,98 +349,99 @@ class BusinessManualReviewStatusView(BaseBuisAdminAPIView):
         })
 
 
-# class AdminBusinessReviewDetailsView(BaseBuisAdminAPIView):
-#     """
-#     GET /api/verify/business/manual-review/status/
-#     """
+class AdminBusinessReviewDetailsView(BaseBuisAdminAPIView):
+    """
+    GET   /api/verify/admin/business/<business_admin_id>/
+    PATCH /api/verify/admin/business/<business_admin_id>/
+    {
+        "checked": true,
+        "needs_manual_review": false,
 
-#     def get(self, request, businessadmin_id):
-#         business_admin = business.businessadmin
-#         BusinessAdmin
-    
-#         onboard_status, _ = BusinessOnboardStatus.objects.get_or_create(
-#             admin=business_admin
-#         )
-    
-#         verifications = {
-#             verification.verification_type: verification.status
-#             for verification in business.verifications.all()
-#         }
-    
-#         required_types = [
-#             BusinessVerification.TYPE_BVN,
-#             BusinessVerification.TYPE_TIN,
-#             BusinessVerification.TYPE_RC,
-#         ]
-    
-#         has_all_verifications = all(
-#             verification_type in verifications
-#             for verification_type in required_types
-#         )
-    
-#         has_failure = any(
-#             verifications.get(verification_type)
-#             == BusinessVerification.STATUS_FAILED
-#             for verification_type in required_types
-#         )
-    
-#         if has_all_verifications and has_failure:
-#             onboard_status.needs_manual_review = True
-#             onboard_status.checked = False
-    
-#             onboard_status.save(
-#                 update_fields=[
-#                     "needs_manual_review",
-#                     "checked",
-#                 ]
-#             )
-    
-#         return onboard_status
+        "verifications": [
+            {
+                "verification_type": "tin",
+                "status": "success"
+            },
+            {
+                "verification_type": "rc",
+                "status": "success"
+            },
+            {
+                "verification_type": "bvn",
+                "status": "failed"
+            }
+        ]
+    }
+    """
 
-# class AdminBusinessReviewListView(BaseBuisAdminAPIView):
-#     """
-#     GET /api/verify/business/manual-review/status/
-#     """
+    def get(self, request, business_admin_id):
 
-#     def get(self, request):
-#         business_admin = business.businessadmin
-#         # BusinessAdmin.objects.filter(business__).all()
-#         onboard_status, _ = BusinessOnboardStatus.objects.get_or_create(
-#             admin=business_admin
-#         )
+        business_admin = get_object_or_404(
+            BusinessAdmin.objects.select_related(
+                "business",
+                "cerd",
+            ).prefetch_related(
+                "business__verifications",
+            ),
+            id=business_admin_id,
+        )
     
-#         verifications = {
-#             verification.verification_type: verification.status
-#             for verification in business.verifications.all()
-#         }
+        onboard_status = business_admin.cerd
     
-#         required_types = [
-#             BusinessVerification.TYPE_BVN,
-#             BusinessVerification.TYPE_TIN,
-#             BusinessVerification.TYPE_RC,
-#         ]
+        serializer = AdminBusinessReviewDetailsSerializer(
+            onboard_status,
+            context={"request": request},
+        )
     
-#         has_all_verifications = all(
-#             verification_type in verifications
-#             for verification_type in required_types
-#         )
-    
-#         has_failure = any(
-#             verifications.get(verification_type)
-#             == BusinessVerification.STATUS_FAILED
-#             for verification_type in required_types
-#         )
-    
-#         if has_all_verifications and has_failure:
-#             onboard_status.needs_manual_review = True
-#             onboard_status.checked = False
-    
-#             onboard_status.save(
-#                 update_fields=[
-#                     "needs_manual_review",
-#                     "checked",
-#                 ]
-#             )
-    
-#         return onboard_status
-        
+        return Response(
+            serializer.data,
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request, business_admin_id):
+
+        business_admin = get_object_or_404(
+            BusinessAdmin.objects.select_related(
+                "business",
+                "cerd",
+                "business__cerd",
+                "business__payout",
+            ).prefetch_related(
+                "business__verifications",
+            ),
+            id=business_admin_id,
+        )
+
+        onboard_status = business_admin.cerd
+
+        serializer = AdminBusinessReviewUpdateSerializer(
+            onboard_status,
+            data=request.data,
+            partial=True,
+            context={"request": request},
+        )
+
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(
+            AdminBusinessReviewDetailsSerializer(
+                onboard_status,
+                context={"request": request},
+            ).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class AdminBusinessReviewListView(BaseBuisAdminAPIView):
+    """
+    GET /api/verify/business/manual-review/status/?page=
+    """
+    pagination_class = StandardResultsSetPagination
+    serializer_class = AdminBusinessReviewListSerializer
+    def get(self, _request):
+        business_admins = BusinessAdmin.objects.filter(cerd__needs_manual_review= True).select_related("business", "cerd")
+        page = self.paginate_queryset(business_admins)
+
+        serializer = self.get_serializer(page, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)

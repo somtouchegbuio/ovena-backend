@@ -1,9 +1,6 @@
 from django.urls import path
 from . import views
 
-# Include this in your project's urls.py:
-# path("api/verify/", include("dojah_verification.urls")),
-
 urlpatterns = [
     # ── Driver Verifications ──────────────────────────────────────
     path("driver/nin/",          views.NINVerificationView.as_view(),         name="verify-driver-nin"),
@@ -17,5 +14,9 @@ urlpatterns = [
     path("business/tin/",        views.TINVerificationView.as_view(),         name="verify-business-tin"),
     path("business/rc/",         views.RCNumberVerificationView.as_view(),    name="verify-business-rc"),
     path("business/bvn/",        views.BusinessBVNVerificationView.as_view(), name="verify-business-bvn"),
-    path("business/status/",        views.BusinessManualReviewStatusView.as_view(), name="verify-business-bvn"),
+    path("business/status/",     views.BusinessManualReviewStatusView.as_view(), name="verify-business-bvn"),
+
+    # admin verfications
+    path("admin/business/<business_admin_id>/",views.AdminBusinessReviewDetailsView.as_view(), name="verify-business-bvn"),
+    path("admin/business/list/", views.AdminBusinessReviewListView.as_view(), name="verify-business-bvn"),
 ]
