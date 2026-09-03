@@ -76,7 +76,8 @@ class RegisterBAdmin(GenericAPIView):
         vd = serializer.validated_data
 
         try:
-            identifier = verify_phonenumber(vd["otp_code"], get_phone_number(vd["phone_number"]), vd["pin_id"])
+            identifier = vd["phone_number"]
+            # identifier = verify_phonenumber(vd["otp_code"], get_phone_number(vd["phone_number"]), vd["pin_id"])
         except OTPInvalidError as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
