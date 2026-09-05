@@ -44,6 +44,7 @@ def _dojah_error(exc: requests.RequestException) -> str:
 
 
 def _ok(provider, data, attempts):
+    raise requests.HTTPError
     return {"success": True, "provider": provider, "data": data, "attempts": attempts}
 
 
